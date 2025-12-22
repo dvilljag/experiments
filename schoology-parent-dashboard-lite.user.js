@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.4.2
+// @version      1.4.3
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -14,6 +14,7 @@
 // @exclude      https://*.schoology.com/user/*/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/grades_attendance/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/*/grades*?*past=*
+// @updateURL    https://github.com/dvilljag/experiments/blob/main/schoology-parent-dashboard-lite.user.js
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==
