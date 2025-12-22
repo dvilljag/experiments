@@ -14,8 +14,6 @@
 // @exclude      https://*.schoology.com/user/*/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/grades_attendance/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/*/grades*?*past=*
-// @updateURL    https://github.com/dvilljag/experiments/blob/main/schoology-parent-dashboard-lite.user.js
-// @downloadURL  https://github.com/dvilljag/experiments/blob/main/schoology-parent-dashboard-lite.user.js
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==
@@ -507,6 +505,7 @@
     const dashboard = new ParentDashboardLite();
     dashboard.init();
 })();
+
 
 
 
