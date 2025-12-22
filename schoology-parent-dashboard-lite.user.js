@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.4.8
+// @version      1.4.9.1
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -27,7 +27,7 @@
             this.courses = [];
         }
 
-        init() {
+        init() {1
             if (!this.isGradePage()) {
                 return;
             }
@@ -54,45 +54,144 @@
         }
 
         detectMarkingPeriod() {
-            const allElements = document.querySelectorAll('*');
-            const foundPeriods = [];
+            console.log('=== Starting MP Detection ===');
             
-            for (const element of allElements) {
-                const text = element.textContent;
+            // Strategy: Find which MP date range contains today's date
+            const today = new Date();
+            const mpSections = new Map();
+            
+            // First pass: Find all MP headers and extract date ranges
+            const allElements = Array.from(document.querySelectorAll('*'));
+            
+            for (let i = 0; i < allElements.length; i++) {
+                const element = allElements[i];
+                const text = element.textContent?.trim();
                 if (!text) continue;
                 
-                const mpMatch = text.match(/MP\s*(\d+)\s*\d{4}-\d{4}/);
+                // Match: "MP 2 2025-2026" format
+                const mpMatch = text.match(/^MP\s*(\d+)\s*(\d{4})-(\d{4})/);
                 if (mpMatch) {
-                    const mpNumber = mpMatch[1];
-                    const isExpanded = text.includes('▼') || 
-                                     element.classList.contains('expanded') ||
-                                     element.classList.contains('open') ||
-                                     element.getAttribute('aria-expanded') === 'true';
+                    const mpNumber = parseInt(mpMatch[1]);
+                    const mp = `MP${mpNumber}`;
+                    const startYear = parseInt(mpMatch[2]);
+                    const endYear = parseInt(mpMatch[3]);
                     
-                    foundPeriods.push({
-                        mp: `MP${mpNumber}`,
-                        number: parseInt(mpNumber),
-                        expanded: isExpanded
-                    });
+                    // Estimate MP date ranges based on typical school year quarters
+                    // MP1: Aug-Oct, MP2: Nov-Jan, MP3: Feb-Mar, MP4: Apr-Jun
+                    let startMonth, endMonth, yearForStart, yearForEnd;
+                    
+                    if (mpNumber === 1) {
+                        startMonth = 8; // August
+                        endMonth = 10; // October
+                        yearForStart = startYear;
+                        yearForEnd = startYear;
+                    } else if (mpNumber === 2) {
+                        startMonth = 11; // November
+                        endMonth = 1; // January
+                        yearForStart = startYear;
+                        yearForEnd = endYear;
+                    } else if (mpNumber === 3) {
+                        startMonth = 2; // February
+                        endMonth = 3; // March
+                        yearForStart = endYear;
+                        yearForEnd = endYear;
+                    } else if (mpNumber === 4) {
+                        startMonth = 4; // April
+                        endMonth = 6; // June
+                        yearForStart = endYear;
+                        yearForEnd = endYear;
+                    }
+                    
+                    const startDate = new Date(yearForStart, startMonth - 1, 1);
+                    const endDate = new Date(yearForEnd, endMonth, 0); // Last day of month
+                    
+                    const isCurrentPeriod = today >= startDate && today <= endDate;
+                    
+                    // Look ahead for assignment indicators
+                    let hasAssignments = false;
+                    let assignmentCount = 0;
+                    
+                    for (let j = i + 1; j < Math.min(i + 50, allElements.length); j++) {
+                        const nextEl = allElements[j];
+                        const nextText = nextEl.textContent?.trim();
+                        
+                        // Stop if we hit another MP header
+                        if (nextText && nextText.match(/^MP\s*\d+\s*\d{4}-\d{4}/)) {
+                            break;
+                        }
+                        
+                        // Check for assignment indicators
+                        if (nextText && (
+                            nextText.match(/^(Minor|Major|Practice)\s*\(\d+%\)/) ||
+                            nextText.includes('Missing') ||
+                            nextText.match(/\d+\/\d+\/\d+\s+\d+:\d+/)
+                        )) {
+                            hasAssignments = true;
+                            assignmentCount++;
+                        }
+                    }
+                    
+                    if (!mpSections.has(mp) || assignmentCount > (mpSections.get(mp)?.assignmentCount || 0)) {
+                        mpSections.set(mp, {
+                            mp,
+                            number: mpNumber,
+                            hasAssignments,
+                            assignmentCount,
+                            isCurrentPeriod,
+                            startDate: startDate.toLocaleDateString(),
+                            endDate: endDate.toLocaleDateString(),
+                            element,
+                            text: text.substring(0, 100)
+                        });
+                    }
                 }
             }
             
-            // Prioritize: 1) Expanded periods, 2) Highest MP number
-            const expandedPeriods = foundPeriods.filter(p => p.expanded);
-            if (expandedPeriods.length > 0) {
-                const selected = expandedPeriods.sort((a, b) => b.number - a.number)[0];
+            console.log('MP Sections found:', Array.from(mpSections.values()));
+            
+            // Prioritize: 1) Current period by date, 2) MP with most assignments
+            const currentPeriods = Array.from(mpSections.values()).filter(m => m.isCurrentPeriod);
+            console.log('Current periods by date:', currentPeriods);
+            
+            if (currentPeriods.length > 0) {
+                const selected = currentPeriods[0];
                 this.currentMarkingPeriod = selected.mp;
+                console.log('Selected MP (current by date):', selected);
+                console.log('=== MP Detection Complete ===');
                 return;
             }
             
-            if (foundPeriods.length > 0) {
-                const selected = foundPeriods.sort((a, b) => b.number - a.number)[0];
+            // Fallback: Select MP with most assignments
+            const mpsWithAssignments = Array.from(mpSections.values()).filter(m => m.hasAssignments);
+            console.log('MPs with assignments:', mpsWithAssignments);
+            
+            if (mpsWithAssignments.length > 0) {
+                const selected = mpsWithAssignments.sort((a, b) => {
+                    if (b.assignmentCount !== a.assignmentCount) {
+                        return b.assignmentCount - a.assignmentCount;
+                    }
+                    return a.number - b.number;
+                })[0];
+                
                 this.currentMarkingPeriod = selected.mp;
+                console.log('Selected MP (has assignments):', selected);
+                console.log('=== MP Detection Complete ===');
+                return;
+            }
+            
+            // Fallback: Use lowest MP number found
+            if (mpSections.size > 0) {
+                const selected = Array.from(mpSections.values()).sort((a, b) => a.number - b.number)[0];
+                this.currentMarkingPeriod = selected.mp;
+                console.log('Selected MP (fallback to lowest):', selected);
+                console.log('=== MP Detection Complete ===');
                 return;
             }
             
             // Default to MP1 if nothing detected
             this.currentMarkingPeriod = 'MP1';
+            console.log('Selected MP (default): MP1');
+            console.log('=== MP Detection Complete ===');
         }
 
         extractCourseData() {
@@ -112,7 +211,8 @@
                 }
             });
             
-            // Extract grades and assignments
+            // Extract grades and assignments - use a Map to deduplicate by course name
+            const courseMap = new Map();
             let currentCourseIndex = -1;
             let currentMP = null;
             const allElements = document.querySelectorAll('*');
@@ -145,14 +245,17 @@
                         const grade = gradeMatch[1];
                         const percentage = parseFloat(gradeMatch[2]);
                         
-                        this.courses.push({
-                            name: currentCourse,
-                            grade: grade,
-                            percentage: percentage,
-                            missingAssignments: [],
-                            submittedCount: 0,
-                            concerningAssignments: []
-                        });
+                        // Only add if not already in map, or update if this has more data
+                        if (!courseMap.has(currentCourse)) {
+                            courseMap.set(currentCourse, {
+                                name: currentCourse,
+                                grade: grade,
+                                percentage: percentage,
+                                missingAssignments: [],
+                                submittedCount: 0,
+                                concerningAssignments: []
+                            });
+                        }
                     }
                 }
                 
@@ -214,7 +317,7 @@
                                 
                                 const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate} ${percentage}%` : `${assignmentName} ${percentage}%`;
                                 
-                                let course = this.courses.find(c => c.name === currentCourse);
+                                let course = courseMap.get(currentCourse);
                                 if (!course) {
                                     course = {
                                         name: currentCourse,
@@ -224,7 +327,7 @@
                                         submittedCount: 0,
                                         concerningAssignments: []
                                     };
-                                    this.courses.push(course);
+                                    courseMap.set(currentCourse, course);
                                 }
                                 course.concerningAssignments.push(fullAssignment);
                                 console.log('✓ Detected concerning assignment:', fullAssignment);
@@ -234,7 +337,7 @@
                                 const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate}` : assignmentName;
                                 
                                 if (assignmentName && assignmentName !== 'Missing' && assignmentName.length > 0) {
-                                    let course = this.courses.find(c => c.name === currentCourse);
+                                    let course = courseMap.get(currentCourse);
                                     if (!course) {
                                         course = {
                                             name: currentCourse,
@@ -244,7 +347,7 @@
                                             submittedCount: 0,
                                             concerningAssignments: []
                                         };
-                                        this.courses.push(course);
+                                        courseMap.set(currentCourse, course);
                                     }
                                     course.missingAssignments.push(fullAssignment);
                                     if (hasSubmittedIcon) {
@@ -257,6 +360,9 @@
                     }
                 }
             }
+            
+            // Convert courseMap to array
+            this.courses = Array.from(courseMap.values());
         }
 
         createDashboard() {
@@ -505,8 +611,3 @@
     const dashboard = new ParentDashboardLite();
     dashboard.init();
 })();
-
-
-
-
-
