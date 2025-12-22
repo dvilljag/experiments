@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.4.91
+// @version      1.4.8
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -14,7 +14,6 @@
 // @exclude      https://*.schoology.com/user/*/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/grades_attendance/grades*?*past=*
 // @exclude      https://*.schoology.com/parent/*/grades*?*past=*
-// @updateURL    https://github.com/dvilljag/experiments/blob/main/schoology-parent-dashboard-lite.user.js
 // @grant        none
 // @run-at       document-end
 // ==/UserScript==
@@ -28,7 +27,7 @@
             this.courses = [];
         }
 
-        init() {1
+        init() {
             if (!this.isGradePage()) {
                 return;
             }
@@ -55,7 +54,6 @@
         }
 
         detectMarkingPeriod() {
-            console.log('=== Starting MP Detection ===');
             const allElements = document.querySelectorAll('*');
             const foundPeriods = [];
             
@@ -66,97 +64,35 @@
                 const mpMatch = text.match(/MP\s*(\d+)\s*\d{4}-\d{4}/);
                 if (mpMatch) {
                     const mpNumber = mpMatch[1];
+                    const isExpanded = text.includes('▼') || 
+                                     element.classList.contains('expanded') ||
+                                     element.classList.contains('open') ||
+                                     element.getAttribute('aria-expanded') === 'true';
                     
-                    // Check multiple indicators for expanded/active state
-                    const hasDownArrow = text.includes('▼');
-                    const hasRightArrow = text.includes('▶');
-                    const hasExpandedClass = element.classList.contains('expanded');
-                    const hasOpenClass = element.classList.contains('open');
-                    const hasActiveClass = element.classList.contains('active');
-                    const hasAriaExpanded = element.getAttribute('aria-expanded') === 'true';
-                    
-                    // Check if parent or nearby elements indicate expansion
-                    const parent = element.parentElement;
-                    const parentExpanded = parent && (
-                        parent.classList.contains('expanded') ||
-                        parent.classList.contains('open') ||
-                        parent.classList.contains('active')
-                    );
-                    
-                    // Check if this MP section has visible content (assignments/grades)
-                    const hasVisibleContent = element.closest('.period-group, .marking-period, .grade-period')?.querySelector('table, .assignment-row, tr');
-                    
-                    const isExpanded = hasDownArrow || hasExpandedClass || hasOpenClass || 
-                                     hasActiveClass || hasAriaExpanded || parentExpanded || hasVisibleContent;
-                    
-                    const periodInfo = {
+                    foundPeriods.push({
                         mp: `MP${mpNumber}`,
                         number: parseInt(mpNumber),
-                        expanded: isExpanded,
-                        hasDownArrow,
-                        hasRightArrow,
-                        hasExpandedClass,
-                        hasOpenClass,
-                        hasActiveClass,
-                        hasAriaExpanded,
-                        parentExpanded,
-                        hasVisibleContent: !!hasVisibleContent,
-                        elementTag: element.tagName,
-                        elementClasses: element.className,
-                        textSnippet: text.substring(0, 100)
-                    };
-                    
-                    foundPeriods.push(periodInfo);
-                    console.log('Found MP:', periodInfo);
+                        expanded: isExpanded
+                    });
                 }
             }
             
-            console.log('Total MPs found:', foundPeriods.length);
-            console.log('All found periods:', foundPeriods);
-            
-            // Prioritize: 1) Expanded periods (prefer lower MP if multiple expanded), 2) MP with visible content, 3) Lowest MP number
+            // Prioritize: 1) Expanded periods, 2) Highest MP number
             const expandedPeriods = foundPeriods.filter(p => p.expanded);
-            console.log('Expanded periods:', expandedPeriods);
-            
             if (expandedPeriods.length > 0) {
-                // If multiple expanded, prefer the one with down arrow or lowest number
-                const withDownArrow = expandedPeriods.filter(p => p.hasDownArrow);
-                if (withDownArrow.length > 0) {
-                    const selected = withDownArrow.sort((a, b) => a.number - b.number)[0];
-                    this.currentMarkingPeriod = selected.mp;
-                    console.log('Selected MP (down arrow):', selected);
-                    return;
-                }
-                
-                const selected = expandedPeriods.sort((a, b) => a.number - b.number)[0];
+                const selected = expandedPeriods.sort((a, b) => b.number - a.number)[0];
                 this.currentMarkingPeriod = selected.mp;
-                console.log('Selected MP (expanded):', selected);
                 return;
             }
             
-            // Check for periods with visible content
-            const withContent = foundPeriods.filter(p => p.hasVisibleContent);
-            console.log('Periods with visible content:', withContent);
-            
-            if (withContent.length > 0) {
-                const selected = withContent.sort((a, b) => a.number - b.number)[0];
-                this.currentMarkingPeriod = selected.mp;
-                console.log('Selected MP (visible content):', selected);
-                return;
-            }
-            
-            // Fallback to lowest MP number found
             if (foundPeriods.length > 0) {
-                const selected = foundPeriods.sort((a, b) => a.number - b.number)[0];
+                const selected = foundPeriods.sort((a, b) => b.number - a.number)[0];
                 this.currentMarkingPeriod = selected.mp;
-                console.log('Selected MP (fallback to lowest):', selected);
                 return;
             }
             
             // Default to MP1 if nothing detected
             this.currentMarkingPeriod = 'MP1';
-            console.log('Selected MP (default):', this.currentMarkingPeriod);
-            console.log('=== MP Detection Complete ===');
         }
 
         extractCourseData() {
@@ -569,4 +505,8 @@
     const dashboard = new ParentDashboardLite();
     dashboard.init();
 })();
+
+
+
+
 
