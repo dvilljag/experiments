@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.4.9.1
+// @version      1.5.0.1
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -215,6 +215,7 @@
             const courseMap = new Map();
             let currentCourseIndex = -1;
             let currentMP = null;
+            let inPracticeCategory = false;
             const allElements = document.querySelectorAll('*');
             
             for (const element of allElements) {
@@ -238,6 +239,7 @@
                 if (mpMatch && currentCourseIndex >= 0) {
                     currentMP = `MP${mpMatch[1]}`;
                     const currentCourse = courseNames[currentCourseIndex];
+                    inPracticeCategory = false; // Reset when entering new MP
                     
                     const gradeMatch = text.match(/([A-F][+-]?)\s*\((\d+(?:\.\d+)?)%\)/);
                     
@@ -257,6 +259,23 @@
                             });
                         }
                     }
+                }
+                
+                // Check if this is a Practice category header
+                if (text.match(/^Practice\s*Category/i) && currentCourseIndex >= 0 && currentMP === this.currentMarkingPeriod) {
+                    inPracticeCategory = true;
+                    console.log('✓ Entered Practice category for course:', courseNames[currentCourseIndex]);
+                }
+                
+                // Check if we're leaving Practice category (entering another category or MP)
+                if (inPracticeCategory && (
+                    text.match(/^(Minor|Major)\s*Category/i) ||
+                    text.match(/^MP\s*\d+\s*\d{4}-\d{4}/) ||
+                    text.match(/^Final\s+Exam/i) ||
+                    text.match(/^Course\s+Grade/i)
+                )) {
+                    inPracticeCategory = false;
+                    console.log('✓ Exited Practice category');
                 }
                 
                 // Check if this is an assignment row with "Missing" status
@@ -349,7 +368,20 @@
                                         };
                                         courseMap.set(currentCourse, course);
                                     }
-                                    course.missingAssignments.push(fullAssignment);
+                                    
+                                    // If in Practice category, only add if course grade is below 80%
+                                    if (inPracticeCategory) {
+                                        if (course.percentage !== null && course.percentage < 80) {
+                                            course.missingAssignments.push(fullAssignment);
+                                            console.log('✓ Detected Practice missing (grade < 80%):', fullAssignment);
+                                        } else {
+                                            console.log('⊘ Skipped Practice missing (grade >= 80%):', fullAssignment);
+                                        }
+                                    } else {
+                                        // Not in Practice category, always add
+                                        course.missingAssignments.push(fullAssignment);
+                                    }
+                                    
                                     if (hasSubmittedIcon) {
                                         course.submittedCount = (course.submittedCount || 0) + 1;
                                         console.log('✓ Detected submitted assignment:', assignmentName);
