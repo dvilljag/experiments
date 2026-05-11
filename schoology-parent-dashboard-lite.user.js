@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.5.0.1
+// @version      1.5.2.0
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -25,6 +25,7 @@
         constructor() {
             this.currentMarkingPeriod = null;
             this.courses = [];
+            this.isMinimized = localStorage.getItem('pdl-minimized') === 'true';
         }
 
         init() {1
@@ -408,6 +409,63 @@
             dashboard.innerHTML = this.buildHTML();
             
             document.body.appendChild(dashboard);
+
+            // Wire up the minimize button
+            const minBtn = document.getElementById('pdl-minimize-btn');
+            if (minBtn) {
+                minBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    this.toggleMinimize();
+                });
+            }
+
+            // Apply initial minimized state without animation
+            if (this.isMinimized) {
+                this.applyMinimizedState(false);
+            }
+        }
+
+        toggleMinimize() {
+            this.isMinimized = !this.isMinimized;
+            localStorage.setItem('pdl-minimized', this.isMinimized);
+            this.applyMinimizedState(true);
+        }
+
+        applyMinimizedState(animate) {
+            const panel = document.querySelector('#parent-dashboard-lite > div');
+            const body = document.getElementById('pdl-body');
+            const minBtn = document.getElementById('pdl-minimize-btn');
+            if (!panel || !body || !minBtn) return;
+
+            if (animate) {
+                body.style.transition = 'max-height 0.3s ease, opacity 0.3s ease';
+            } else {
+                body.style.transition = 'none';
+            }
+
+            if (this.isMinimized) {
+                // Collapse body, anchor to bottom-right, keep full width so button is reachable
+                panel.style.setProperty('top', 'auto', 'important');
+                panel.style.setProperty('bottom', '20px', 'important');
+                panel.style.setProperty('max-height', 'none', 'important');
+                panel.style.setProperty('overflow', 'visible', 'important');
+                body.style.maxHeight = '0';
+                body.style.opacity = '0';
+                body.style.overflow = 'hidden';
+                minBtn.textContent = '▲';
+                minBtn.title = 'Expand dashboard';
+            } else {
+                // Restore full panel
+                panel.style.setProperty('top', '100px', 'important');
+                panel.style.removeProperty('bottom');
+                panel.style.setProperty('max-height', 'calc(100vh - 100px)', 'important');
+                panel.style.setProperty('overflow-y', 'auto', 'important');
+                body.style.maxHeight = '';
+                body.style.opacity = '';
+                body.style.overflow = '';
+                minBtn.textContent = '▼';
+                minBtn.title = 'Minimize dashboard';
+            }
         }
 
         setupMenuDetection() {
@@ -507,28 +565,40 @@
                     
                     <!-- Header -->
                     <div style="padding: 16px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                                color: white; border-radius: 8px 8px 0 0;">
-                        <h2 style="margin: 0; font-size: 18px; font-weight: 600;">📊 Parent Dashboard Lite</h2>
-                        <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">${this.currentMarkingPeriod}</div>
+                                color: white; border-radius: 8px 8px 0 0; display: flex; align-items: center; justify-content: space-between;">
+                        <div>
+                            <h2 style="margin: 0; font-size: 18px; font-weight: 600;">📊 Parent Dashboard Lite</h2>
+                            <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">${this.currentMarkingPeriod}</div>
+                        </div>
+                        <button id="pdl-minimize-btn" title="Minimize dashboard"
+                            style="background: rgba(255,255,255,0.2); border: none; color: white; cursor: pointer;
+                                   width: 28px; height: 28px; border-radius: 50%; font-size: 13px; font-weight: 700;
+                                   display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+                                   transition: background 0.2s; line-height: 1; padding: 0;"
+                            onmouseover="this.style.background='rgba(255,255,255,0.35)'"
+                            onmouseout="this.style.background='rgba(255,255,255,0.2)'">▼</button>
                     </div>
 
-                    <!-- Summary -->
-                    <div style="padding: 16px 20px; border-bottom: 1px solid #e1e4e8; background: #f6f8fa;">
-                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                            <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid ${totalMissing > 0 ? '#fbbf24' : '#10b981'};">
-                                <div style="font-size: 24px; font-weight: 700; color: ${totalMissing > 0 ? '#f59e0b' : '#059669'};">${totalMissing}</div>
-                                <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
-                            </div>
-                            <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid #3b82f6;">
-                                <div style="font-size: 24px; font-weight: 700; color: #2563eb;">${avgGrade}</div>
-                                <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Avg Grade</div>
+                    <!-- Body (hidden when minimized) -->
+                    <div id="pdl-body">
+                        <!-- Summary -->
+                        <div style="padding: 16px 20px; border-bottom: 1px solid #e1e4e8; background: #f6f8fa;">
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid ${totalMissing > 0 ? '#fbbf24' : '#10b981'};">
+                                    <div style="font-size: 24px; font-weight: 700; color: ${totalMissing > 0 ? '#f59e0b' : '#059669'};">${totalMissing}</div>
+                                    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
+                                </div>
+                                <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid #3b82f6;">
+                                    <div style="font-size: 24px; font-weight: 700; color: #2563eb;">${avgGrade}</div>
+                                    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Avg Grade</div>
+                                </div>
                             </div>
                         </div>
-                    </div>
 
-                    <!-- Course List -->
-                    <div style="padding: 16px 20px;">
-                        ${this.buildCourseList()}
+                        <!-- Course List -->
+                        <div style="padding: 16px 20px;">
+                            ${this.buildCourseList()}
+                        </div>
                     </div>
                 </div>
             `;
