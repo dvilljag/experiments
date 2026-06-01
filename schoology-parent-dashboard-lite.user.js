@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.6.0
+// @version      1.6.3
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -272,7 +272,7 @@
                 if (inPracticeCategory && (
                     text.match(/^(Minor|Major)\s*Category/i) ||
                     text.match(/^MP\s*\d+\s*\d{4}-\d{4}/) ||
-                    text.match(/^Final\s+Exam/i) ||
+                    text.match(/^Final\s+Exam\s+Semester/i) ||
                     text.match(/^Course\s+Grade/i)
                 )) {
                     inPracticeCategory = false;
@@ -300,6 +300,14 @@
                                                 rowHTML.includes('grade-pending-icon') ||
                                                 rowHTML.includes('has-dropbox-icon');
                         
+                        // Also detect submission via accessible text in the grade cell
+                        const hasSubmittedText = gradeCellText.includes('has made a submission') ||
+                                                 gradeCellText.includes('has completed assignment submission') ||
+                                                 gradeCellText.includes('has completed the test') ||
+                                                 gradeCellText.includes('has posted in the discussion');
+
+                        const isSubmitted = hasSubmittedIcon || hasSubmittedText;
+                        
                         // Check for failing grade (E or F)
                         const failingGradeMatch = gradeCellText.match(/([EF])\s*(\d+)\s*\/\s*(\d+)/);
                         
@@ -307,6 +315,7 @@
                             assignment: lines[0],
                             allLines: lines,
                             hasIcon: hasSubmittedIcon,
+                            isSubmitted: isSubmitted,
                             gradeCellText: gradeCellText,
                             failingGrade: failingGradeMatch ? `${failingGradeMatch[1]} ${failingGradeMatch[2]}/${failingGradeMatch[3]}` : null
                         });
@@ -354,38 +363,38 @@
                             }
                             // Handle missing assignments
                             else if (rowText.includes('Missing') && !rowText.includes('Exempt')) {
-                                const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate}` : assignmentName;
-                                
-                                if (assignmentName && assignmentName !== 'Missing' && assignmentName.length > 0) {
-                                    let course = courseMap.get(currentCourse);
-                                    if (!course) {
-                                        course = {
-                                            name: currentCourse,
-                                            grade: '—',
-                                            percentage: null,
-                                            missingAssignments: [],
-                                            submittedCount: 0,
-                                            concerningAssignments: []
-                                        };
-                                        courseMap.set(currentCourse, course);
-                                    }
+                                // Skip if the student has already submitted — it's just awaiting a grade
+                                if (isSubmitted) {
+                                    console.log('⊘ Skipped missing (already submitted):', assignmentName);
+                                } else {
+                                    const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate}` : assignmentName;
                                     
-                                    // If in Practice category, only add if course grade is below 80%
-                                    if (inPracticeCategory) {
-                                        if (course.percentage !== null && course.percentage < 80) {
-                                            course.missingAssignments.push(fullAssignment);
-                                            console.log('✓ Detected Practice missing (grade < 80%):', fullAssignment);
-                                        } else {
-                                            console.log('⊘ Skipped Practice missing (grade >= 80%):', fullAssignment);
+                                    if (assignmentName && assignmentName !== 'Missing' && assignmentName.length > 0) {
+                                        let course = courseMap.get(currentCourse);
+                                        if (!course) {
+                                            course = {
+                                                name: currentCourse,
+                                                grade: '—',
+                                                percentage: null,
+                                                missingAssignments: [],
+                                                submittedCount: 0,
+                                                concerningAssignments: []
+                                            };
+                                            courseMap.set(currentCourse, course);
                                         }
-                                    } else {
-                                        // Not in Practice category, always add
-                                        course.missingAssignments.push(fullAssignment);
-                                    }
-                                    
-                                    if (hasSubmittedIcon) {
-                                        course.submittedCount = (course.submittedCount || 0) + 1;
-                                        console.log('✓ Detected submitted assignment:', assignmentName);
+                                        
+                                        // If in Practice category, only add if course grade is below 80%
+                                        if (inPracticeCategory) {
+                                            if (course.percentage !== null && course.percentage < 80) {
+                                                course.missingAssignments.push({ text: fullAssignment, isPractice: true });
+                                                console.log('✓ Detected Practice missing (grade < 80%):', fullAssignment);
+                                            } else {
+                                                console.log('⊘ Skipped Practice missing (grade >= 80%):', fullAssignment);
+                                            }
+                                        } else {
+                                            // Not in Practice category, always add
+                                            course.missingAssignments.push({ text: fullAssignment, isPractice: false });
+                                        }
                                     }
                                 }
                             }
@@ -640,11 +649,11 @@
                         ${hasMissing ? `
                             <div style="padding: 12px 14px; background: white; ${hasConcerning ? 'border-bottom: 1px solid #fde68a;' : ''}">
                                 <div style="font-size: 12px; color: #7c2d12; font-weight: 800; margin-bottom: 6px;">
-                                    ${course.missingAssignments.length} Missing Assignment${course.missingAssignments.length > 1 ? 's' : ''}${course.submittedCount > 0 ? ' (Submitted)' : ''}
+                                    ${course.missingAssignments.length} Missing Assignment${course.missingAssignments.length > 1 ? 's' : ''}
                                 </div>
-                                ${course.missingAssignments.slice(0, 5).map(assignment => `
-                                    <div style="font-size: 11px; color: #78350f; margin-left: 12px; margin-top: 3px; line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;">
-                                        • ${assignment}
+                                ${course.missingAssignments.slice(0, 5).map(a => `
+                                    <div style="font-size: 11px; color: #78350f; margin-left: 12px; margin-top: 3px; line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;${a.isPractice ? ' font-style: italic;' : ''}">
+                                        • ${a.isPractice ? '(P) ' : ''}${a.text}
                                     </div>
                                 `).join('')}
                                 ${course.missingAssignments.length > 5 ? `
