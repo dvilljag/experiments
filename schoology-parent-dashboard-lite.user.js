@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.6.3
+// @version      1.6.4
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -20,6 +20,8 @@
 
 (function () {
     'use strict';
+
+    const VERSION = '1.6.4';
 
     class ParentDashboardLite {
         constructor() {
@@ -577,7 +579,10 @@
                                 color: white; border-radius: 8px 8px 0 0; display: flex; align-items: center; justify-content: space-between;">
                         <div>
                             <h2 style="margin: 0; font-size: 18px; font-weight: 600;">📊 Parent Dashboard Lite</h2>
-                            <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">${this.currentMarkingPeriod}</div>
+                            <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">
+                                ${this.currentMarkingPeriod}
+                                <span style="margin-left: 10px; color: #86efac; font-weight: 600;">Version ${VERSION}</span>
+                            </div>
                         </div>
                         <button id="pdl-minimize-btn" title="Minimize dashboard"
                             style="background: rgba(255,255,255,0.2); border: none; color: white; cursor: pointer;
