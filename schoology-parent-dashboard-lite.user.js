@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.7.5
+// @version      1.7.6
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.7.5';
+    const VERSION = '1.7.6';
 
     class ParentDashboardLite {
         constructor() {
@@ -521,6 +521,7 @@
             // Menu detection only relevant on desktop — on mobile the panel is full-width at top
             if (this.mobile) {
                 // On mobile: when a dropdown opens, slide the dashboard to the bottom so it's out of the way
+                let debounceTimer = null;
                 const checkMobileMenu = () => {
                     const panel = document.querySelector('#parent-dashboard-lite > div');
                     const body = document.getElementById('pdl-body');
@@ -549,8 +550,9 @@
                         if (expanded) isMenuOpen = true;
                     }
 
-                    if (isMenuOpen) {
+                    if (isMenuOpen && !this._dockedToBottom) {
                         // Slide to bottom: collapse body, anchor to bottom of screen
+                        this._dockedToBottom = true;
                         panel.style.setProperty('transition', 'top 0.3s ease, bottom 0.3s ease', 'important');
                         panel.style.setProperty('top', 'auto', 'important');
                         panel.style.setProperty('bottom', '0', 'important');
@@ -558,6 +560,7 @@
                         panel.style.setProperty('max-height', 'none', 'important');
                         panel.style.setProperty('overflow', 'visible', 'important');
                         if (body) {
+                            body.style.transition = 'max-height 0.3s ease, opacity 0.3s ease';
                             body.style.maxHeight = '0';
                             body.style.opacity = '0';
                             body.style.overflow = 'hidden';
@@ -566,16 +569,16 @@
                             minBtn.textContent = '▲';
                             minBtn.title = 'Expand dashboard';
                         }
-                        this._dockedToBottom = true;
-                    } else if (this._dockedToBottom) {
-                        // Restore to top — but only if the user hasn't manually minimized
+                    } else if (!isMenuOpen && this._dockedToBottom) {
+                        // Restore to top
                         this._dockedToBottom = false;
                         if (!this.isMinimized) {
+                            const mobileTop = this.getMobileTopOffset();
                             panel.style.setProperty('transition', 'top 0.3s ease, bottom 0.3s ease', 'important');
-                            panel.style.setProperty('top', this.getMobileTopOffset(), 'important');
+                            panel.style.setProperty('top', mobileTop, 'important');
                             panel.style.removeProperty('bottom');
                             panel.style.setProperty('border-radius', '0 0 12px 12px', 'important');
-                            panel.style.setProperty('max-height', `calc(90vh - ${this.getMobileTopOffset()})`, 'important');
+                            panel.style.setProperty('max-height', `calc(90vh - ${mobileTop})`, 'important');
                             panel.style.setProperty('overflow-y', 'auto', 'important');
                             if (body) {
                                 body.style.maxHeight = '';
@@ -590,14 +593,25 @@
                     }
                 };
 
-                const observer = new MutationObserver(checkMobileMenu);
+                // Debounced wrapper — only runs check 150ms after mutations stop firing
+                const debouncedCheck = () => {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(checkMobileMenu, 150);
+                };
+
+                // Watch only attribute changes on existing nodes, not full subtree childList
+                // This is much lighter than watching all DOM mutations
+                const observer = new MutationObserver(debouncedCheck);
                 observer.observe(document.body, {
-                    childList: true, subtree: true,
-                    attributes: true, attributeFilter: ['class', 'style', 'aria-expanded']
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'aria-expanded', 'style']
                 });
+
+                // Click is the primary trigger — check promptly after any tap
                 document.addEventListener('click', () => {
-                    setTimeout(checkMobileMenu, 50);
-                    setTimeout(checkMobileMenu, 300);
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(checkMobileMenu, 100);
                 });
                 return;
             }
