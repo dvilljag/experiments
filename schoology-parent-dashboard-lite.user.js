@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.6.5
+// @version      1.7.1
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,13 +21,22 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.6.5';
+    const VERSION = '1.7.1';
 
     class ParentDashboardLite {
         constructor() {
             this.currentMarkingPeriod = null;
             this.courses = [];
-            this.isMinimized = localStorage.getItem('pdl-minimized') === 'true';
+            this.mobile = this.isMobile();
+            // Default to minimized on mobile so the dashboard doesn't block the page on load
+            const stored = localStorage.getItem('pdl-minimized');
+            this.isMinimized = stored !== null ? stored === 'true' : this.mobile;
+        }
+
+        isMobile() {
+            // Physical screen narrower than 600 CSS px, or a high-DPR device rendering a scaled-down desktop page
+            return window.screen.width < 600 || 
+                   (window.devicePixelRatio >= 2 && window.screen.width < 900);
         }
 
         init() {1
@@ -455,9 +464,15 @@
             }
 
             if (this.isMinimized) {
-                // Collapse body, anchor to bottom-right, keep full width so button is reachable
-                panel.style.setProperty('top', 'auto', 'important');
-                panel.style.setProperty('bottom', '20px', 'important');
+                if (this.mobile) {
+                    // On mobile: collapse body but keep header visible at top of screen
+                    panel.style.setProperty('top', '0', 'important');
+                    panel.style.removeProperty('bottom');
+                } else {
+                    // On desktop: anchor minimized header to bottom-right
+                    panel.style.setProperty('top', 'auto', 'important');
+                    panel.style.setProperty('bottom', '20px', 'important');
+                }
                 panel.style.setProperty('max-height', 'none', 'important');
                 panel.style.setProperty('overflow', 'visible', 'important');
                 body.style.maxHeight = '0';
@@ -466,10 +481,15 @@
                 minBtn.textContent = '▲';
                 minBtn.title = 'Expand dashboard';
             } else {
-                // Restore full panel
-                panel.style.setProperty('top', '100px', 'important');
-                panel.style.removeProperty('bottom');
-                panel.style.setProperty('max-height', 'calc(100vh - 100px)', 'important');
+                if (this.mobile) {
+                    panel.style.setProperty('top', '0', 'important');
+                    panel.style.removeProperty('bottom');
+                    panel.style.setProperty('max-height', '90vh', 'important');
+                } else {
+                    panel.style.setProperty('top', '100px', 'important');
+                    panel.style.removeProperty('bottom');
+                    panel.style.setProperty('max-height', 'calc(100vh - 100px)', 'important');
+                }
                 panel.style.setProperty('overflow-y', 'auto', 'important');
                 body.style.maxHeight = '';
                 body.style.opacity = '';
@@ -480,7 +500,8 @@
         }
 
         setupMenuDetection() {
-            // Watch for the user menu dropdown to open/close
+            // Menu detection only relevant on desktop — on mobile the panel is full-width at top
+            if (this.mobile) return;
             const checkMenu = () => {
                 const dashboard = document.getElementById('parent-dashboard-lite');
                 if (!dashboard) return;
@@ -588,28 +609,50 @@
         buildHTML() {
             const totalMissing = this.courses.reduce((sum, course) => sum + course.missingAssignments.length, 0);
             const avgGrade = this.calculateAverageGrade();
-            
+            const m = this.mobile;
+
+            // Mobile: full-width overlay pinned to top, larger everything
+            // Desktop: fixed side panel as before
+            const panelStyle = m
+                ? `position: fixed; top: 0; left: 0; right: 0; width: 100%; max-width: 100%;
+                   background: white; border: none; border-radius: 0 0 12px 12px;
+                   box-shadow: 0 4px 24px rgba(0,0,0,0.25);
+                   z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+                   font-size: 16px; max-height: 90vh; overflow-y: auto;`
+                : `position: fixed; top: 100px; right: 20px; width: 360px; background: white;
+                   border: 1px solid #d1d5da; border-radius: 8px; box-shadow: 0 8px 24px rgba(149, 157, 165, 0.2);
+                   z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+                   font-size: 14px; max-height: calc(100vh - 100px); overflow-y: auto;`;
+
+            const headerPadding   = m ? '20px 24px' : '16px 20px';
+            const titleSize       = m ? '22px' : '18px';
+            const subtitleSize    = m ? '14px' : '12px';
+            const btnSize         = m ? '40px' : '28px';
+            const btnFontSize     = m ? '18px' : '13px';
+            const summaryPadding  = m ? '20px 24px' : '16px 20px';
+            const summaryNumSize  = m ? '32px' : '24px';
+            const summaryLblSize  = m ? '13px' : '11px';
+            const summaryPad      = m ? '16px' : '12px';
+            const coursePad       = m ? '20px 24px' : '16px 20px';
+
             return `
-                <div style="position: fixed; top: 100px; right: 20px; width: 360px; background: white; 
-                            border: 1px solid #d1d5da; border-radius: 8px; box-shadow: 0 8px 24px rgba(149, 157, 165, 0.2); 
-                            z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
-                            font-size: 14px; max-height: calc(100vh - 100px); overflow-y: auto;">
-                    
+                <div style="${panelStyle}">
                     <!-- Header -->
-                    <div style="padding: 16px 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
-                                color: white; border-radius: 8px 8px 0 0; display: flex; align-items: center; justify-content: space-between;">
+                    <div style="padding: ${headerPadding}; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                                color: white; border-radius: ${m ? '0' : '8px 8px 0 0'};
+                                display: flex; align-items: center; justify-content: space-between;">
                         <div>
-                            <h2 style="margin: 0; font-size: 18px; font-weight: 600;">📊 Parent Dashboard Lite</h2>
-                            <div style="font-size: 12px; opacity: 0.9; margin-top: 4px;">
+                            <h2 style="margin: 0; font-size: ${titleSize}; font-weight: 600;">📊 Parent Dashboard Lite</h2>
+                            <div style="font-size: ${subtitleSize}; opacity: 0.9; margin-top: 4px;">
                                 ${this.currentMarkingPeriod}
                                 <span style="margin-left: 10px; color: #86efac; font-weight: 600;">Version ${VERSION}</span>
                             </div>
                         </div>
                         <button id="pdl-minimize-btn" title="Minimize dashboard"
                             style="background: rgba(255,255,255,0.2); border: none; color: white; cursor: pointer;
-                                   width: 28px; height: 28px; border-radius: 50%; font-size: 13px; font-weight: 700;
+                                   width: ${btnSize}; height: ${btnSize}; border-radius: 50%; font-size: ${btnFontSize}; font-weight: 700;
                                    display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-                                   transition: background 0.2s; line-height: 1; padding: 0;"
+                                   transition: background 0.2s; line-height: 1; padding: 0; touch-action: manipulation;"
                             onmouseover="this.style.background='rgba(255,255,255,0.35)'"
                             onmouseout="this.style.background='rgba(255,255,255,0.2)'">▼</button>
                     </div>
@@ -617,21 +660,21 @@
                     <!-- Body (hidden when minimized) -->
                     <div id="pdl-body">
                         <!-- Summary -->
-                        <div style="padding: 16px 20px; border-bottom: 1px solid #e1e4e8; background: #f6f8fa;">
+                        <div style="padding: ${summaryPadding}; border-bottom: 1px solid #e1e4e8; background: #f6f8fa;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                                <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid ${totalMissing > 0 ? '#fbbf24' : '#10b981'};">
-                                    <div style="font-size: 24px; font-weight: 700; color: ${totalMissing > 0 ? '#f59e0b' : '#059669'};">${totalMissing}</div>
-                                    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
+                                <div style="text-align: center; padding: ${summaryPad}; background: white; border-radius: 6px; border: 2px solid ${totalMissing > 0 ? '#fbbf24' : '#10b981'};">
+                                    <div style="font-size: ${summaryNumSize}; font-weight: 700; color: ${totalMissing > 0 ? '#f59e0b' : '#059669'};">${totalMissing}</div>
+                                    <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
                                 </div>
-                                <div style="text-align: center; padding: 12px; background: white; border-radius: 6px; border: 2px solid #3b82f6;">
-                                    <div style="font-size: 24px; font-weight: 700; color: #2563eb;">${avgGrade}</div>
-                                    <div style="font-size: 11px; color: #6b7280; text-transform: uppercase; font-weight: 600;">Avg Grade</div>
+                                <div style="text-align: center; padding: ${summaryPad}; background: white; border-radius: 6px; border: 2px solid #3b82f6;">
+                                    <div style="font-size: ${summaryNumSize}; font-weight: 700; color: #2563eb;">${avgGrade}</div>
+                                    <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Avg Grade</div>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Course List -->
-                        <div style="padding: 16px 20px;">
+                        <div style="padding: ${coursePad};">
                             ${this.buildCourseList()}
                         </div>
                     </div>
@@ -644,6 +687,15 @@
                 return '<div style="text-align: center; color: #6b7280; padding: 20px;">No course data available</div>';
             }
 
+            const m = this.mobile;
+            const courseNameSize  = m ? '15px' : '13px';
+            const gradeLetterSize = m ? '30px' : '24px';
+            const gradePctSize    = m ? '20px' : '16px';
+            const sectionHdrSize  = m ? '14px' : '12px';
+            const assignmentSize  = m ? '13px' : '11px';
+            const coursePad       = m ? '14px 18px' : '12px 14px';
+            const truncateLen     = m ? 32 : 28;
+
             return this.courses.map(course => {
                 const gradeColor = this.getGradeColor(course.grade);
                 const hasMissing = course.missingAssignments.length > 0;
@@ -654,17 +706,17 @@
                                 border: 2px solid ${gradeColor}; border-radius: 6px; overflow: hidden;">
                         
                         <!-- Course Header -->
-                        <div style="padding: 12px 14px; background: ${hasMissing || hasConcerning ? '#fef3c7' : '#f9fafb'}; 
+                        <div style="padding: ${coursePad}; background: ${hasMissing || hasConcerning ? '#fef3c7' : '#f9fafb'}; 
                                     border-bottom: 1px solid ${gradeColor}; display: flex; justify-content: space-between; align-items: center;">
-                            <div style="font-weight: 600; color: #1f2937; font-size: 13px; flex: 1;">
-                                ${this.truncate(course.name, 28)}
+                            <div style="font-weight: 600; color: #1f2937; font-size: ${courseNameSize}; flex: 1;">
+                                ${this.truncate(course.name, truncateLen)}
                             </div>
                             <div style="display: flex; align-items: center; gap: 8px;">
-                                <div style="font-size: 24px; font-weight: 700; color: ${gradeColor}; line-height: 1;">
+                                <div style="font-size: ${gradeLetterSize}; font-weight: 700; color: ${gradeColor}; line-height: 1;">
                                     ${course.grade}
                                 </div>
                                 ${course.percentage !== null ? `
-                                    <div style="font-size: 16px; color: #6b7280; font-weight: 600;">
+                                    <div style="font-size: ${gradePctSize}; color: #6b7280; font-weight: 600;">
                                         ${course.percentage}%
                                     </div>
                                 ` : ''}
@@ -673,17 +725,17 @@
                         
                         <!-- Missing Assignments -->
                         ${hasMissing ? `
-                            <div style="padding: 12px 14px; background: white; ${hasConcerning ? 'border-bottom: 1px solid #fde68a;' : ''}">
-                                <div style="font-size: 12px; color: #7c2d12; font-weight: 800; margin-bottom: 6px;">
+                            <div style="padding: ${coursePad}; background: white; ${hasConcerning ? 'border-bottom: 1px solid #fde68a;' : ''}">
+                                <div style="font-size: ${sectionHdrSize}; color: #7c2d12; font-weight: 800; margin-bottom: 6px;">
                                     ${course.missingAssignments.length} Missing Assignment${course.missingAssignments.length > 1 ? 's' : ''}
                                 </div>
                                 ${course.missingAssignments.slice(0, 5).map(a => `
-                                    <div style="font-size: 11px; color: #78350f; margin-left: 12px; margin-top: 3px; line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;${a.isPractice ? ' font-style: italic;' : ''}">
+                                    <div style="font-size: ${assignmentSize}; color: #78350f; margin-left: 12px; margin-top: ${m ? '5px' : '3px'}; line-height: 1.5; word-wrap: break-word; overflow-wrap: break-word;${a.isPractice ? ' font-style: italic;' : ''}">
                                         • ${a.isPractice ? '(P) ' : ''}${a.text}
                                     </div>
                                 `).join('')}
                                 ${course.missingAssignments.length > 5 ? `
-                                    <div style="font-size: 11px; color: #78350f; margin-left: 12px; margin-top: 3px; font-style: italic;">
+                                    <div style="font-size: ${assignmentSize}; color: #78350f; margin-left: 12px; margin-top: 3px; font-style: italic;">
                                         +${course.missingAssignments.length - 5} more...
                                     </div>
                                 ` : ''}
@@ -692,17 +744,17 @@
                         
                         <!-- Concerning Assignments -->
                         ${hasConcerning ? `
-                            <div style="padding: 12px 14px; background: white;">
-                                <div style="font-size: 11px; color: #991b1b; font-weight: 700; margin-bottom: 6px;">
+                            <div style="padding: ${coursePad}; background: white;">
+                                <div style="font-size: ${sectionHdrSize}; color: #991b1b; font-weight: 700; margin-bottom: 6px;">
                                     ${course.concerningAssignments.length} Concerning Assignment${course.concerningAssignments.length > 1 ? 's' : ''}
                                 </div>
                                 ${course.concerningAssignments.slice(0, 5).map(assignment => `
-                                    <div style="font-size: 11px; color: #7f1d1d; margin-left: 12px; margin-top: 3px; line-height: 1.4; word-wrap: break-word; overflow-wrap: break-word;">
+                                    <div style="font-size: ${assignmentSize}; color: #7f1d1d; margin-left: 12px; margin-top: ${m ? '5px' : '3px'}; line-height: 1.5; word-wrap: break-word; overflow-wrap: break-word;">
                                         • ${assignment}
                                     </div>
                                 `).join('')}
                                 ${course.concerningAssignments.length > 5 ? `
-                                    <div style="font-size: 11px; color: #7f1d1d; margin-left: 12px; margin-top: 3px; font-style: italic;">
+                                    <div style="font-size: ${assignmentSize}; color: #7f1d1d; margin-left: 12px; margin-top: 3px; font-style: italic;">
                                         +${course.concerningAssignments.length - 5} more...
                                     </div>
                                 ` : ''}
@@ -711,7 +763,7 @@
                         
                         <!-- No Issues -->
                         ${!hasMissing && !hasConcerning ? `
-                            <div style="padding: 12px 14px; background: white; text-align: center; color: #10b981; font-size: 12px; font-weight: 500;">
+                            <div style="padding: ${coursePad}; background: white; text-align: center; color: #10b981; font-size: ${sectionHdrSize}; font-weight: 500;">
                                 ✓ No missing assignments
                             </div>
                         ` : ''}
