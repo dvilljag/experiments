@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.7.1
+// @version      1.7.2
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,22 +21,39 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.7.1';
+    const VERSION = '1.7.2';
 
     class ParentDashboardLite {
         constructor() {
             this.currentMarkingPeriod = null;
             this.courses = [];
             this.mobile = this.isMobile();
-            // Default to minimized on mobile so the dashboard doesn't block the page on load
+            // On mobile: start expanded (parent wants to see data immediately)
+            // On desktop: restore last saved state
             const stored = localStorage.getItem('pdl-minimized');
-            this.isMinimized = stored !== null ? stored === 'true' : this.mobile;
+            this.isMinimized = stored !== null ? stored === 'true' : false;
         }
 
         isMobile() {
             // Physical screen narrower than 600 CSS px, or a high-DPR device rendering a scaled-down desktop page
             return window.screen.width < 600 || 
                    (window.devicePixelRatio >= 2 && window.screen.width < 900);
+        }
+
+        getMobileTopOffset() {
+            // Try to find the Schoology native header/nav bar and sit below it
+            const navSelectors = [
+                '#topbar', '#header', '.header', 'header',
+                '[class*="topbar"]', '[class*="nav-bar"]', '[class*="app-header"]',
+                '[role="banner"]'
+            ];
+            for (const sel of navSelectors) {
+                const el = document.querySelector(sel);
+                if (el && el.offsetHeight > 0) {
+                    return el.getBoundingClientRect().bottom + 'px';
+                }
+            }
+            return '50px'; // safe fallback
         }
 
         init() {1
@@ -465,8 +482,8 @@
 
             if (this.isMinimized) {
                 if (this.mobile) {
-                    // On mobile: collapse body but keep header visible at top of screen
-                    panel.style.setProperty('top', '0', 'important');
+                    // On mobile: collapse body but keep header visible just below the Schoology nav
+                    panel.style.setProperty('top', this.getMobileTopOffset(), 'important');
                     panel.style.removeProperty('bottom');
                 } else {
                     // On desktop: anchor minimized header to bottom-right
@@ -482,9 +499,10 @@
                 minBtn.title = 'Expand dashboard';
             } else {
                 if (this.mobile) {
-                    panel.style.setProperty('top', '0', 'important');
+                    const mobileTop = this.getMobileTopOffset();
+                    panel.style.setProperty('top', mobileTop, 'important');
                     panel.style.removeProperty('bottom');
-                    panel.style.setProperty('max-height', '90vh', 'important');
+                    panel.style.setProperty('max-height', `calc(90vh - ${mobileTop})`, 'important');
                 } else {
                     panel.style.setProperty('top', '100px', 'important');
                     panel.style.removeProperty('bottom');
@@ -611,14 +629,16 @@
             const avgGrade = this.calculateAverageGrade();
             const m = this.mobile;
 
-            // Mobile: full-width overlay pinned to top, larger everything
+            const mobileTop = this.mobile ? this.getMobileTopOffset() : '100px';
+
+            // Mobile: full-width overlay pinned below the Schoology nav bar, larger everything
             // Desktop: fixed side panel as before
             const panelStyle = m
-                ? `position: fixed; top: 0; left: 0; right: 0; width: 100%; max-width: 100%;
+                ? `position: fixed; top: ${mobileTop}; left: 0; right: 0; width: 100%; max-width: 100%;
                    background: white; border: none; border-radius: 0 0 12px 12px;
                    box-shadow: 0 4px 24px rgba(0,0,0,0.25);
                    z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-                   font-size: 16px; max-height: 90vh; overflow-y: auto;`
+                   font-size: 16px; max-height: calc(90vh - ${mobileTop}); overflow-y: auto;`
                 : `position: fixed; top: 100px; right: 20px; width: 360px; background: white;
                    border: 1px solid #d1d5da; border-radius: 8px; box-shadow: 0 8px 24px rgba(149, 157, 165, 0.2);
                    z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
