@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.7.6
+// @version      1.7.7
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.7.6';
+    const VERSION = '1.7.7';
 
     class ParentDashboardLite {
         constructor() {
@@ -482,9 +482,10 @@
 
             if (this.isMinimized) {
                 if (this.mobile) {
-                    // On mobile: collapse body but keep header visible just below the Schoology nav
-                    panel.style.setProperty('top', this.getMobileTopOffset(), 'important');
-                    panel.style.removeProperty('bottom');
+                    // On mobile: slide to bottom of screen, same as dropdown-docking behavior
+                    panel.style.setProperty('top', 'auto', 'important');
+                    panel.style.setProperty('bottom', '0', 'important');
+                    panel.style.setProperty('border-radius', '12px 12px 0 0', 'important');
                 } else {
                     // On desktop: anchor minimized header to bottom-right
                     panel.style.setProperty('top', 'auto', 'important');
@@ -502,6 +503,7 @@
                     const mobileTop = this.getMobileTopOffset();
                     panel.style.setProperty('top', mobileTop, 'important');
                     panel.style.removeProperty('bottom');
+                    panel.style.setProperty('border-radius', '0 0 12px 12px', 'important');
                     panel.style.setProperty('max-height', `calc(90vh - ${mobileTop})`, 'important');
                 } else {
                     panel.style.setProperty('top', '100px', 'important');
