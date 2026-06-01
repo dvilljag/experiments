@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.7.2
+// @version      1.7.3
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,17 +21,17 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.7.2';
+    const VERSION = '1.7.3';
 
     class ParentDashboardLite {
         constructor() {
             this.currentMarkingPeriod = null;
             this.courses = [];
             this.mobile = this.isMobile();
-            // On mobile: start expanded (parent wants to see data immediately)
-            // On desktop: restore last saved state
-            const stored = localStorage.getItem('pdl-minimized');
-            this.isMinimized = stored !== null ? stored === 'true' : false;
+            // Always start expanded — ignore any saved minimized state
+            // (localStorage still saves the state for within-session minimize/expand)
+            this.isMinimized = false;
+            localStorage.setItem('pdl-minimized', 'false');
         }
 
         isMobile() {
@@ -519,7 +519,52 @@
 
         setupMenuDetection() {
             // Menu detection only relevant on desktop — on mobile the panel is full-width at top
-            if (this.mobile) return;
+            if (this.mobile) {
+                // On mobile: watch for dropdowns and lower dashboard z-index so they render on top
+                const checkMobileMenu = () => {
+                    const panel = document.querySelector('#parent-dashboard-lite > div');
+                    if (!panel) return;
+
+                    const menuSelectors = [
+                        '[class*="dropdown-menu"]:not([style*="display: none"])',
+                        '.dropdown.open .dropdown-menu',
+                        '.show .dropdown-menu',
+                        '[role="menu"]',
+                        '[class*="user-dropdown"]',
+                        '[class*="popover"]'
+                    ];
+
+                    let isMenuOpen = false;
+                    for (const selector of menuSelectors) {
+                        const menu = document.querySelector(selector);
+                        if (menu && menu.offsetParent !== null) {
+                            isMenuOpen = true;
+                            break;
+                        }
+                    }
+                    // Also check aria-expanded
+                    const expanded = document.querySelector('[aria-expanded="true"]');
+                    if (expanded) isMenuOpen = true;
+
+                    if (isMenuOpen) {
+                        // Drop below the dropdown so it's fully visible
+                        panel.style.setProperty('z-index', '999', 'important');
+                    } else {
+                        panel.style.setProperty('z-index', '10000', 'important');
+                    }
+                };
+
+                const observer = new MutationObserver(checkMobileMenu);
+                observer.observe(document.body, {
+                    childList: true, subtree: true,
+                    attributes: true, attributeFilter: ['class', 'style', 'aria-expanded']
+                });
+                document.addEventListener('click', () => {
+                    setTimeout(checkMobileMenu, 50);
+                    setTimeout(checkMobileMenu, 300);
+                });
+                return;
+            }
             const checkMenu = () => {
                 const dashboard = document.getElementById('parent-dashboard-lite');
                 if (!dashboard) return;
