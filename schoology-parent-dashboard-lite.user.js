@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.6.4
+// @version      1.6.5
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.6.4';
+    const VERSION = '1.6.5';
 
     class ParentDashboardLite {
         constructor() {
@@ -524,10 +524,31 @@
                 
                 console.log('Menu check:', { isMenuOpen, foundMenu, currentRight: contentDiv.style.right });
                 
-                // Slide dashboard left and lower z-index when menu is open
+                // Slide dashboard left so it doesn't overlap the open dropdown
                 if (isMenuOpen) {
-                    console.log('Moving dashboard left');
-                    contentDiv.style.setProperty('right', '280px', 'important');
+                    // Find the open menu element to measure its left edge
+                    let openMenu = null;
+                    for (const selector of menuSelectors) {
+                        const menu = document.querySelector(selector);
+                        if (menu && menu.offsetParent !== null) {
+                            openMenu = menu;
+                            break;
+                        }
+                    }
+
+                    let rightOffset = 280; // fallback if we can't measure
+                    if (openMenu) {
+                        const menuRect = openMenu.getBoundingClientRect();
+                        const viewportWidth = window.innerWidth;
+                        const dashboardWidth = contentDiv.offsetWidth || 360;
+                        const gap = 12; // px clearance between dashboard right edge and menu left edge
+                        // right = viewportWidth - menuRect.left + gap
+                        const needed = viewportWidth - menuRect.left + gap;
+                        rightOffset = Math.max(needed, 20); // never go below default
+                        console.log('Menu rect:', menuRect, 'computed rightOffset:', rightOffset);
+                    }
+
+                    contentDiv.style.setProperty('right', `${rightOffset}px`, 'important');
                     contentDiv.style.setProperty('z-index', '9999', 'important');
                     contentDiv.style.setProperty('transition', 'right 0.3s ease', 'important');
                 } else {
