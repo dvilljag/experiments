@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.7.7
+// @version      1.9.1
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.7.7';
+    const VERSION = '1.9.1';
 
     class ParentDashboardLite {
         constructor() {
@@ -80,6 +80,10 @@
             this.extractCourseData();
             this.createDashboard();
             this.setupMenuDetection();
+            // Progressive enhancement: fetch teacher emails from the Schoology v2 API.
+            // The dashboard is already visible — this enriches it asynchronously without
+            // blocking the initial render. Fails gracefully if the API is unavailable.
+            this.fetchTeacherData().then(map => this.injectTeacherEmails(map));
         }
 
         detectMarkingPeriod() {
@@ -352,8 +356,13 @@
                             let assignmentName = lines[0];
                             const currentCourse = courseNames[currentCourseIndex];
                             
-                            // Strip existing date/time from assignment name (format: "Due MM/DD/YY HH:MMam/pm")
-                            assignmentName = assignmentName.replace(/\s+Due\s+\d{1,2}\/\d{1,2}\/\d{2}\s+\d{1,2}:\d{2}(am|pm)/i, '').trim();
+                            // Strip "Note: This material is not available within Schoology" — this text
+                            // appears on paper/external assignments and bleeds into the assignment name
+                            assignmentName = assignmentName.replace(/\s*Note:\s*This material is not available within Schoology/gi, '').trim();
+                            
+                            // Strip existing date/time from assignment name.
+                            // Handles both "Due MM/DD/YY HH:MMam/pm" and bare "Due MM/DD/YY" (no time).
+                            assignmentName = assignmentName.replace(/\s+Due\s+\d{1,2}\/\d{1,2}\/\d{2,4}(\s+\d{1,2}:\d{2}(am|pm))?/gi, '').trim();
                             
                             // Extract just MM/DD from the lines
                             let shortDate = '';
@@ -365,32 +374,11 @@
                                 }
                             }
                             
-                            // Handle failing grades
-                            if (failingGradeMatch) {
-                                const letterGrade = failingGradeMatch[1];
-                                const points = failingGradeMatch[2];
-                                const maxPoints = failingGradeMatch[3];
-                                const percentage = maxPoints > 0 ? Math.round((points / maxPoints) * 100) : 0;
-                                
-                                const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate} ${percentage}%` : `${assignmentName} ${percentage}%`;
-                                
-                                let course = courseMap.get(currentCourse);
-                                if (!course) {
-                                    course = {
-                                        name: currentCourse,
-                                        grade: '—',
-                                        percentage: null,
-                                        missingAssignments: [],
-                                        submittedCount: 0,
-                                        concerningAssignments: []
-                                    };
-                                    courseMap.set(currentCourse, course);
-                                }
-                                course.concerningAssignments.push(fullAssignment);
-                                console.log('✓ Detected concerning assignment:', fullAssignment);
-                            }
-                            // Handle missing assignments
-                            else if (rowText.includes('Missing') && !rowText.includes('Exempt')) {
+                            // Handle missing assignments FIRST — an assignment marked "Missing" goes into
+                            // the missing list regardless of what grade is shown (E 0/10 is common for
+                            // missing items). Checking this before the failing-grade branch prevents
+                            // missing assignments from being silently reclassified as "concerning".
+                            if (rowText.includes('Missing') && !rowText.includes('Exempt')) {
                                 // Skip if the student has already submitted — it's just awaiting a grade
                                 if (isSubmitted) {
                                     console.log('⊘ Skipped missing (already submitted):', assignmentName);
@@ -426,6 +414,41 @@
                                     }
                                 }
                             }
+                            // Handle failing grades — only for assignments NOT marked as Missing.
+                            // If an assignment is both failing AND missing (e.g. E 0/10 + Missing circle),
+                            // the missing branch above takes priority. The Missing section is the primary
+                            // alert; the Concerning section is for submitted-but-failing work only.
+                            else if (failingGradeMatch) {
+                                const letterGrade = failingGradeMatch[1];
+                                const points = failingGradeMatch[2];
+                                const maxPoints = failingGradeMatch[3];
+                                const percentage = maxPoints > 0 ? Math.round((points / maxPoints) * 100) : 0;
+                                
+                                const fullAssignment = shortDate ? `${assignmentName} Due ${shortDate} ${percentage}%` : `${assignmentName} ${percentage}%`;
+                                
+                                let course = courseMap.get(currentCourse);
+                                if (!course) {
+                                    course = {
+                                        name: currentCourse,
+                                        grade: '—',
+                                        percentage: null,
+                                        missingAssignments: [],
+                                        submittedCount: 0,
+                                        concerningAssignments: []
+                                    };
+                                    courseMap.set(currentCourse, course);
+                                }
+                                
+                                // Apply the same Practice threshold to Concerning as we do to Missing.
+                                // A student with >= 80% in a course doesn't need low-weight Practice
+                                // items flagged as concerning — their overall grade already signals health.
+                                if (inPracticeCategory && course.percentage !== null && course.percentage >= 80) {
+                                    console.log('⊘ Skipped Practice concerning (grade >= 80%):', fullAssignment);
+                                } else {
+                                    course.concerningAssignments.push(fullAssignment);
+                                    console.log('✓ Detected concerning assignment:', fullAssignment);
+                                }
+                            }
                         }
                     }
                 }
@@ -433,6 +456,19 @@
             
             // Convert courseMap to array
             this.courses = Array.from(courseMap.values());
+
+            // Enrich each course with its Schoology section ID from the gradebook DOM.
+            // Container elements carry the ID in the format: id="s-js-gradebook-course-{id}".
+            // These IDs match the v2 API section IDs and are used to build direct gradebook links.
+            document.querySelectorAll('[id^="s-js-gradebook-course-"]').forEach(container => {
+                const idMatch = container.id.match(/s-js-gradebook-course-(\d+)/);
+                if (!idMatch) return;
+                const link = container.querySelector('.gradebook-course-title a');
+                if (!link) return;
+                const cleanName = link.textContent.trim().split('(')[0].trim().replace(/Course$/, '').trim();
+                const course = this.courses.find(c => c.name === cleanName);
+                if (course) course.sectionId = idMatch[1];
+            });
         }
 
         createDashboard() {
@@ -722,8 +758,9 @@
         }
 
         buildHTML() {
-            const totalMissing = this.courses.reduce((sum, course) => sum + course.missingAssignments.length, 0);
-            const avgGrade = this.calculateAverageGrade();
+            const totalMissing    = this.courses.reduce((sum, course) => sum + course.missingAssignments.length, 0);
+            const avgGrade        = this.calculateAverageGrade();
+            const missingEmailUrl = this.buildMissingEmailUrl();
             const m = this.mobile;
 
             const mobileTop = this.mobile ? this.getMobileTopOffset() : '100px';
@@ -779,10 +816,24 @@
                         <!-- Summary -->
                         <div style="padding: ${summaryPadding}; border-bottom: 1px solid #e1e4e8; background: #f6f8fa;">
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                                <div style="text-align: center; padding: ${summaryPad}; background: white; border-radius: 6px; border: 2px solid ${totalMissing > 0 ? '#fbbf24' : '#10b981'};">
-                                    <div style="font-size: ${summaryNumSize}; font-weight: 700; color: ${totalMissing > 0 ? '#f59e0b' : '#059669'};">${totalMissing}</div>
-                                    <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
-                                </div>
+                                ${missingEmailUrl ? `
+                                    <a href="${missingEmailUrl}"
+                                       title="Email this assignment list to your student"
+                                       style="display: block; text-decoration: none; text-align: center;
+                                              padding: ${summaryPad}; background: white; border-radius: 6px;
+                                              border: 2px solid #fbbf24; cursor: pointer;"
+                                       onmouseover="this.style.background='#fffbeb'; this.style.borderColor='#f59e0b'"
+                                       onmouseout="this.style.background='white'; this.style.borderColor='#fbbf24'">
+                                        <div style="font-size: ${summaryNumSize}; font-weight: 700; color: #f59e0b;">${totalMissing}</div>
+                                        <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
+                                        <div style="font-size: ${m ? '11px' : '9px'}; color: #d97706; margin-top: 2px;">✉ email student</div>
+                                    </a>
+                                ` : `
+                                    <div style="text-align: center; padding: ${summaryPad}; background: white; border-radius: 6px; border: 2px solid #10b981;">
+                                        <div style="font-size: ${summaryNumSize}; font-weight: 700; color: #059669;">0</div>
+                                        <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Missing</div>
+                                    </div>
+                                `}
                                 <div style="text-align: center; padding: ${summaryPad}; background: white; border-radius: 6px; border: 2px solid #3b82f6;">
                                     <div style="font-size: ${summaryNumSize}; font-weight: 700; color: #2563eb;">${avgGrade}</div>
                                     <div style="font-size: ${summaryLblSize}; color: #6b7280; text-transform: uppercase; font-weight: 600;">Avg Grade</div>
@@ -793,6 +844,15 @@
                         <!-- Course List -->
                         <div style="padding: ${coursePad};">
                             ${this.buildCourseList()}
+                        </div>
+
+                        <!-- Footer -->
+                        <div style="padding: 10px 20px; border-top: 1px solid #e1e4e8; text-align: center; background: #f6f8fa;">
+                            <a href="https://bcps.schoology.com/parent/grades_attendance/grades"
+                               target="_blank"
+                               style="color: #667eea; font-size: ${m ? '13px' : '11px'}; text-decoration: none; font-weight: 500;"
+                               onmouseover="this.style.textDecoration='underline'"
+                               onmouseout="this.style.textDecoration='none'">Open Schoology ↗</a>
                         </div>
                     </div>
                 </div>
@@ -819,14 +879,21 @@
                 const hasConcerning = course.concerningAssignments.length > 0;
                 
                 return `
-                    <div style="margin-bottom: 16px; padding: 0; background: white; 
+                    <div data-pdl-course="${course.name.replace(/"/g, '&quot;')}"
+                         style="margin-bottom: 16px; padding: 0; background: white; 
                                 border: 2px solid ${gradeColor}; border-radius: 6px; overflow: hidden;">
                         
                         <!-- Course Header -->
                         <div style="padding: ${coursePad}; background: ${hasMissing || hasConcerning ? '#fef3c7' : '#f9fafb'}; 
                                     border-bottom: 1px solid ${gradeColor}; display: flex; justify-content: space-between; align-items: center;">
-                            <div style="font-weight: 600; color: #1f2937; font-size: ${courseNameSize}; flex: 1;">
-                                ${this.truncate(course.name, truncateLen)}
+                            <div data-pdl-email-slot style="font-weight: 600; color: #1f2937; font-size: ${courseNameSize}; flex: 1;">
+                                ${course.sectionId ? `<a href="https://bcps.schoology.com/course/${course.sectionId}/student_grades"
+                                       target="_blank"
+                                       style="color: inherit; text-decoration: none;"
+                                       onmouseover="this.style.textDecoration='underline'"
+                                       onmouseout="this.style.textDecoration='none'"
+                                    >${this.truncate(course.name, truncateLen)}</a>`
+                                : this.truncate(course.name, truncateLen)}
                             </div>
                             <div style="display: flex; align-items: center; gap: 8px;">
                                 <div style="font-size: ${gradeLetterSize}; font-weight: 700; color: ${gradeColor}; line-height: 1;">
@@ -887,6 +954,183 @@
                     </div>
                 `;
             }).join('');
+        }
+
+        // ── Missing Assignment Email ──────────────────────────────────────────
+        //
+        // Generates a mailto: URL whose pre-filled body lists all missing
+        // assignments grouped by course (Mockup 1 style — mobile friendly,
+        // plain text, no section codes, ALL-CAPS course headers).
+        // Returns null when there is nothing missing.
+
+        getStudentFirstName() {
+            // Schoology shows "You are viewing as {Full Name}" in an impersonation banner
+            // when a parent is viewing a child's account. Walk all text nodes to find it
+            // and return just the first name.
+            const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
+            let node;
+            while ((node = walker.nextNode())) {
+                const m = node.textContent.match(/You are viewing as\s+(\S+)/i);
+                if (m) return m[1];
+            }
+            return null;
+        }
+
+        buildMissingEmailUrl() {
+            const coursesWithMissing = this.courses.filter(c => c.missingAssignments.length > 0);
+            if (coursesWithMissing.length === 0) return null;
+
+            const total     = coursesWithMissing.reduce((sum, c) => sum + c.missingAssignments.length, 0);
+            const avg       = this.calculateAverageGrade();
+            const firstName = this.getStudentFirstName();
+
+            // Subject includes the student's first name so it's immediately personal on mobile
+            const namePrefix = firstName ? `${firstName}: ` : '';
+            const subject = `${namePrefix}${total} missing assignment${total !== 1 ? 's' : ''} need attention`;
+
+            const lines = [];
+            const greeting = firstName ? `${firstName}, you have` : 'You have';
+            lines.push(`${greeting} ${total} missing assignment${total !== 1 ? 's' : ''}. Current average: ${avg}.`);
+
+            for (const course of coursesWithMissing) {
+                lines.push('');
+                // Strip the section code (": Sec 021 A PER02") — student just needs the course name
+                const shortName = course.name.split(':')[0].trim().toUpperCase();
+                const gradeStr  = course.percentage !== null
+                    ? `${course.grade}, ${course.percentage}%`
+                    : course.grade;
+                lines.push(`${shortName} (${gradeStr})`);
+
+                // Bare URL after the course header — email clients auto-link it on mobile
+                if (course.sectionId) {
+                    lines.push(`https://bcps.schoology.com/course/${course.sectionId}/student_grades`);
+                }
+
+                for (const a of course.missingAssignments) {
+                    // Transform "Name Due M/D" → "- Name, due M/D"
+                    const formatted = a.text.replace(/\s+Due\s+(\d{1,2}\/\d{1,2})$/, ', due $1');
+                    lines.push(`- ${formatted}`);
+                }
+            }
+
+            lines.push('');
+            lines.push('Open Schoology and see your grades:');
+            lines.push('https://bcps.schoology.com/grades');
+
+            const body = lines.join('\n');
+            return `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+        }
+
+        // ── Teacher Email API ─────────────────────────────────────────────────
+        //
+        // Uses the Schoology v2 API, which responds to the browser's existing
+        // session cookies — no OAuth or API keys required.
+        //
+        // Flow:
+        //   1. Each course container in the gradebook DOM has id="s-js-gradebook-course-{sectionId}".
+        //      These IDs are the same section IDs the v2 API uses.
+        //   2. Fetch /v2/sections/{id}/members?role=admin for each section in parallel.
+        //   3. The response includes the teacher's name and email directly.
+        //   4. Inject a mailto link into each course card in the dashboard.
+
+        async fetchTeacherData() {
+            try {
+                // Pull section IDs and course names directly from the gradebook DOM.
+                // The container IDs use the same numeric IDs as the v2 API.
+                const courseContainers = document.querySelectorAll('[id^="s-js-gradebook-course-"]');
+                const requests = [];
+
+                for (const container of courseContainers) {
+                    const idMatch = container.id.match(/s-js-gradebook-course-(\d+)/);
+                    if (!idMatch) continue;
+
+                    const sectionId = idMatch[1];
+
+                    // Extract and normalize the course name the same way extractCourseData() does
+                    const link = container.querySelector('.gradebook-course-title a');
+                    if (!link) continue;
+
+                    const courseName = link.textContent.trim()
+                        .split('(')[0].trim()
+                        .replace(/Course$/, '').trim();
+
+                    if (courseName.length > 2) {
+                        requests.push({ sectionId, courseName });
+                    }
+                }
+
+                if (requests.length === 0) return {};
+
+                // Fire all admin member requests in parallel
+                const teacherMap = {};
+                await Promise.all(requests.map(async ({ sectionId, courseName }) => {
+                    try {
+                        const resp = await fetch(
+                            `/v2/sections/${sectionId}/members?pageSize=100&role=admin`,
+                            { credentials: 'include' }
+                        );
+                        if (!resp.ok) return;
+
+                        const data = await resp.json();
+                        const teacher = data['@extra']?.[0];
+
+                        if (teacher?.email) {
+                            teacherMap[courseName] = {
+                                name: teacher.name?.full || '',
+                                email: teacher.email
+                            };
+                        }
+                    } catch {
+                        // Skip sections that fail — dashboard still works without teacher data
+                    }
+                }));
+
+                console.log(`PDL: Teacher data loaded for ${Object.keys(teacherMap).length}/${requests.length} courses`);
+                return teacherMap;
+
+            } catch (err) {
+                console.log('PDL: Teacher data fetch skipped:', err.message);
+                return {};
+            }
+        }
+
+        injectTeacherEmails(teacherMap) {
+            if (!teacherMap || Object.keys(teacherMap).length === 0) return;
+
+            const m = this.mobile;
+            const emailFontSize = m ? '12px' : '10px';
+
+            const cards = document.querySelectorAll('#parent-dashboard-lite [data-pdl-course]');
+            for (const card of cards) {
+                const courseName = card.getAttribute('data-pdl-course');
+                const teacher = teacherMap[courseName];
+                if (!teacher) continue;
+
+                const slot = card.querySelector('[data-pdl-email-slot]');
+                if (!slot || slot.querySelector('.pdl-teacher-email')) continue;
+
+                // Build the email link using DOM APIs (avoids XSS risk from API data)
+                const link = document.createElement('a');
+                link.href = `mailto:${teacher.email}`;
+                link.textContent = `✉ ${teacher.name} · ${teacher.email}`;
+                link.style.cssText = [
+                    `color: #9ca3af`,
+                    `text-decoration: none`,
+                    `font-size: ${emailFontSize}`,
+                    `font-weight: 400`,
+                    `display: inline-block`,
+                    `margin-top: 3px`,
+                    `line-height: 1.4`,
+                ].join('; ');
+                link.addEventListener('mouseover', () => { link.style.color = '#3b82f6'; link.style.textDecoration = 'underline'; });
+                link.addEventListener('mouseout',  () => { link.style.color = '#9ca3af'; link.style.textDecoration = 'none'; });
+                link.addEventListener('click', e => e.stopPropagation());
+
+                const wrapper = document.createElement('div');
+                wrapper.className = 'pdl-teacher-email';
+                wrapper.appendChild(link);
+                slot.appendChild(wrapper);
+            }
         }
 
         calculateAverageGrade() {
