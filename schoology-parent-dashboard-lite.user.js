@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Schoology Parent Dashboard Lite
 // @namespace    http://tampermonkey.net/
-// @version      1.9.1
+// @version      1.9.8
 // @description  Lightweight dashboard showing missing assignments and current grades for the active marking period
 // @author       Parent Dashboard Team
 // @match        https://*.schoology.com/grades*
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.9.1';
+    const VERSION = '1.9.8';
 
     class ParentDashboardLite {
         constructor() {
@@ -1035,53 +1035,57 @@
 
         async fetchTeacherData() {
             try {
-                // Pull section IDs and course names directly from the gradebook DOM.
-                // The container IDs use the same numeric IDs as the v2 API.
-                const courseContainers = document.querySelectorAll('[id^="s-js-gradebook-course-"]');
-                const requests = [];
+                // Build section requests from sectionIds set by extractCourseData(),
+                // or fall back to /v2/sections API if DOM IDs weren't found.
+                let requests = this.courses
+                    .filter(c => c.sectionId)
+                    .map(c => ({ sectionId: c.sectionId, courseName: c.name }));
 
-                for (const container of courseContainers) {
-                    const idMatch = container.id.match(/s-js-gradebook-course-(\d+)/);
-                    if (!idMatch) continue;
-
-                    const sectionId = idMatch[1];
-
-                    // Extract and normalize the course name the same way extractCourseData() does
-                    const link = container.querySelector('.gradebook-course-title a');
-                    if (!link) continue;
-
-                    const courseName = link.textContent.trim()
-                        .split('(')[0].trim()
-                        .replace(/Course$/, '').trim();
-
-                    if (courseName.length > 2) {
-                        requests.push({ sectionId, courseName });
+                if (requests.length === 0) {
+                    const sectResp = await fetch('/v2/sections', { credentials: 'include' });
+                    if (!sectResp.ok) return {};
+                    const sectData = await sectResp.json();
+                    for (const extra of sectData['@extra'] || []) {
+                        const sectionId    = (extra['@id'] || '').split('/').pop();
+                        const sectionTitle = extra.title;
+                        if (!sectionId || !sectionTitle) continue;
+                        const course = this.courses.find(c => c.name.includes(sectionTitle));
+                        if (course) {
+                            if (!course.sectionId) course.sectionId = sectionId;
+                            requests.push({ sectionId, courseName: course.name });
+                        }
                     }
                 }
 
                 if (requests.length === 0) return {};
 
-                // Fire all admin member requests in parallel
                 const teacherMap = {};
+
                 await Promise.all(requests.map(async ({ sectionId, courseName }) => {
                     try {
+                        // Use /v2/section-groups/{id} — this endpoint is accessible to parent
+                        // accounts and includes instructor metadata (members endpoint 403s for parents)
                         const resp = await fetch(
-                            `/v2/sections/${sectionId}/members?pageSize=100&role=admin`,
+                            `/v2/section-groups/${sectionId}`,
                             { credentials: 'include' }
                         );
                         if (!resp.ok) return;
-
                         const data = await resp.json();
-                        const teacher = data['@extra']?.[0];
 
-                        if (teacher?.email) {
-                            teacherMap[courseName] = {
-                                name: teacher.name?.full || '',
-                                email: teacher.email
-                            };
+                        // Instructor info may appear at top level, in @extra[0], or in @links
+                        const extra0  = data['@extra']?.[0] || {};
+                        const firstName = data.instructorFirstName || extra0.instructorFirstName || extra0.firstName || '';
+                        const lastName  = data.instructorLastName  || extra0.instructorLastName  || extra0.lastName  || '';
+                        const email     = data.instructorEmail     || extra0.instructorEmail     || extra0.email     || '';
+                        const fullName  = (firstName && lastName)
+                            ? `${firstName} ${lastName}`.trim()
+                            : (data.instructorName || data.name?.full || '');
+
+                        if (email) {
+                            teacherMap[courseName] = { name: fullName, email };
                         }
                     } catch {
-                        // Skip sections that fail — dashboard still works without teacher data
+                        // Silently skip — dashboard still works without teacher data
                     }
                 }));
 
